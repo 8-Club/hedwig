@@ -181,7 +181,7 @@ func (h *Hub) run() {
 				}
 				if globals.cluster != nil {
 					if t.isProxy {
-						t.proxy = make(chan *ClusterResp, 32)
+						t.proxy = make(chan *ClusterResp, 128)
 						t.masterNode = globals.cluster.ring.Get(t.name)
 					} else {
 						// It's a master topic. Make a channel for handling
@@ -625,6 +625,7 @@ func replyOfflineTopicGetDesc(sess *Session, msg *ClientComMessage) {
 		desc.Public = stopic.Public
 		desc.Trusted = stopic.Trusted
 		desc.IsChan = stopic.UseBt
+		desc.SubCnt = stopic.SubCnt
 		if stopic.Owner == msg.AsUser {
 			desc.DefaultAcs = &MsgDefaultAcsMode{
 				Auth: stopic.Access.Auth.String(),

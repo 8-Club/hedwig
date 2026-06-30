@@ -207,6 +207,8 @@ func ParseUserId(s string) Uid {
 }
 
 // GrpToChn converts group topic name to corresponding channel name.
+// If it's a non-group channel topic, the name is returned unchanged.
+// If it's neither, an empty string is returned.
 func GrpToChn(grp string) string {
 	if strings.HasPrefix(grp, "grp") {
 		return strings.Replace(grp, "grp", "chn", 1)
@@ -227,6 +229,7 @@ func IsChannel(name string) bool {
 
 // ChnToGrp gets group topic name from channel name.
 // If it's a non-channel group topic, the name is returned unchanged.
+// If it's neither, an empty string is returned.
 func ChnToGrp(chn string) string {
 	if strings.HasPrefix(chn, "chn") {
 		return strings.Replace(chn, "chn", "grp", 1)
@@ -925,6 +928,9 @@ type Subscription struct {
 	// Timestamp & user agent of when the user was last online.
 	lastSeenUA *LastSeenUA
 
+	// Count of subscribers.
+	subCnt int
+
 	// P2P only. ID of the other user
 	with string
 	// P2P only. Default access: this is the mode given by the other user to this user
@@ -995,6 +1001,16 @@ func (s *Subscription) GetSeqId() int {
 // SetSeqId sets seqId field.
 func (s *Subscription) SetSeqId(id int) {
 	s.seqId = id
+}
+
+// GetSubCnt returns subCnt (subscriber count).
+func (s *Subscription) GetSubCnt() int {
+	return s.subCnt
+}
+
+// SetSubCnt sets subCnt (subscriber count).
+func (s *Subscription) SetSubCnt(cnt int) {
+	s.subCnt = cnt
 }
 
 // GetLastSeen returns lastSeen.
@@ -1111,6 +1127,9 @@ type Topic struct {
 	SeqId int
 	// If messages were deleted, sequential id of the last operation to delete them
 	DelId int
+
+	// Count of topic subscribers.
+	SubCnt int
 
 	Public  any
 	Trusted any
@@ -1369,6 +1388,13 @@ func GetTopicCat(name string) TopicCat {
 	default:
 		panic("invalid topic type for name '" + name + "'")
 	}
+}
+
+// IsEphemeralTopic checks if the topic is ephemeral, i.e. it's a reference to the user,
+// it's not stored in the 'topics' table like 'me' or 'fnd' topics.
+func IsEphemeralTopic(topic string) bool {
+	cat := GetTopicCat(topic)
+	return cat == TopicCatMe || cat == TopicCatFnd
 }
 
 // DeviceDef is the data provided by connected device. Used primarily for

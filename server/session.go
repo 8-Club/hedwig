@@ -477,26 +477,30 @@ func (s *Session) dispatch(msg *ClientComMessage) {
 		return
 	}
 
-	if msg.Extra == nil || msg.Extra.AsUser == "" {
+	var authLvl auth.Level
+	if msg.Extra != nil {
+		authLvl = auth.ParseAuthLevel(msg.Extra.AuthLevel)
+	}
+	if msg.Extra == nil || (msg.Extra.AsUser == "" && authLvl == auth.LevelNone) {
 		// Use current user's ID and auth level.
 		msg.AsUser = s.uid.UserId()
 		msg.AuthLvl = int(s.authLvl)
 	} else if s.authLvl != auth.LevelRoot {
 		// Only root user can set alternative user ID and auth level values.
 		s.queueOut(ErrPermissionDenied("", "", now))
-		logs.Warn.Println("s.dispatch: non-root asigned msg.from", s.sid)
+		logs.Warn.Println("s.dispatch: non-root assigned asUser", s.sid)
 		return
 	} else if fromUid := types.ParseUserId(msg.Extra.AsUser); fromUid.IsZero() {
 		// Invalid msg.Extra.AsUser.
 		s.queueOut(ErrMalformed("", "", now))
-		logs.Warn.Println("s.dispatch: malformed msg.from: ", msg.Extra.AsUser, s.sid)
+		logs.Warn.Println("s.dispatch: malformed asUser: ", msg.Extra.AsUser, s.sid)
 		return
 	} else {
 		// Use provided msg.Extra.AsUser
 		msg.AsUser = msg.Extra.AsUser
 
 		// Assign auth level, if one is provided. Ignore invalid strings.
-		if authLvl := auth.ParseAuthLevel(msg.Extra.AuthLevel); authLvl == auth.LevelNone {
+		if authLvl == auth.LevelNone {
 			// AuthLvl is not set by the caller, assign default LevelAuth.
 			msg.AuthLvl = int(auth.LevelAuth)
 		} else {
@@ -798,8 +802,11 @@ func (s *Session) hello(msg *ClientComMessage) {
 		if !s.uid.IsZero() {
 			var err error
 			if msg.Hi.DeviceID == types.NullValue {
+				// User wants to delete device ID.
 				deviceIDUpdate = true
-				err = store.Devices.Delete(s.uid, s.deviceID)
+				if s.deviceID != "" {
+					err = store.Devices.Delete(s.uid, s.deviceID)
+				}
 			} else if msg.Hi.DeviceID != "" && s.deviceID != msg.Hi.DeviceID {
 				deviceIDUpdate = true
 				err = store.Devices.Update(s.uid, s.deviceID, &types.DeviceDef{
@@ -813,10 +820,17 @@ func (s *Session) hello(msg *ClientComMessage) {
 			}
 
 			if err != nil {
+				s.queueOut(decodeStoreError(err, msg.Id, msg.Timestamp, nil))
 				logs.Warn.Println("s.hello:", "device ID", err, s.sid)
-				s.queueOut(ErrUnknown(msg.Id, "", msg.Timestamp))
 				return
 			}
+		} else {
+			// Session is not authenticated, report an error. Otherwise,
+			// the client may think that the device ID was updated successfully,
+			// but it will not be saved in the database.
+			s.queueOut(ErrAuthRequiredReply(msg, msg.Timestamp))
+			logs.Warn.Println("s.hello:", "device ID update requires authentication", s.sid)
+			return
 		}
 	} else {
 		// Version cannot be changed mid-session.

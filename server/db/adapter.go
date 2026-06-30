@@ -116,11 +116,13 @@ type Adapter interface {
 	// ChannelsForUser loads a slice of topic names where the user is a channel reader and notifications (P) are enabled.
 	ChannelsForUser(uid t.Uid) ([]string, error)
 	// TopicShare creates topic subscriptions.
-	TopicShare(subs []*t.Subscription) error
+	TopicShare(topic string, subs []*t.Subscription) error
 	// TopicDelete deletes topic, subscriptions, messages.
 	TopicDelete(topic string, isChan, hard bool) error
 	// TopicUpdateOnMessage increments Topic's or User's SeqId value and updates TouchedAt timestamp.
 	TopicUpdateOnMessage(topic string, msg *t.Message) error
+	// TopicUpdateSubCnt refreshes denormalized topic subscriber count.
+	TopicUpdateSubCnt(topic string) error
 	// TopicUpdate updates topic record.
 	TopicUpdate(topic string, update map[string]any) error
 	// TopicOwnerChange updates topic's owner
@@ -199,4 +201,9 @@ type Adapter interface {
 	PCacheDelete(key string) error
 	// PCacheExpire expires older entries with the specified key prefix.
 	PCacheExpire(keyPrefix string, olderThan time.Time) error
+
+	// Testing
+
+	// GetTestDB returns a currently open database connection.
+	GetTestDB() any
 }
