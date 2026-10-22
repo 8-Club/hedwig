@@ -118,10 +118,7 @@ func (sess *Session) writeGrpcLoop() {
 			}
 
 		case <-sess.bkgTimer.C:
-			if sess.background {
-				sess.background = false
-				sess.onBackgroundTimer()
-			}
+			sess.onBackgroundTimer()
 
 		case msg := <-sess.stop:
 			// Shutdown requested, don't care if the message is delivered

@@ -815,7 +815,7 @@ func (t *Topic) handleLeaveRequest(msg *ClientComMessage, sess *Session) {
 				// len(pssd.muids) could be zero if the session was a background session.
 				meUid = pssd.muids[0]
 			}
-			if !meUid.IsZero() {
+			if !meUid.IsZero() && !sess.background {
 				// Update user's last online timestamp & user agent. Only one user can be subscribed to 'me' topic.
 				if err := store.Users.UpdateLastSeen(meUid, mrs.userAgent, now); err != nil {
 					logs.Warn.Println("user update last seen:", err)

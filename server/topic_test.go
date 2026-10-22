@@ -2208,6 +2208,43 @@ func TestUnregisterSessionSimple(t *testing.T) {
 	}
 }
 
+func TestUnregisterBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
+	topicName := "usrMe"
+	helper := TopicTestHelper{}
+	helper.setUp(t, 1, types.TopicCatMe, topicName, true)
+	defer helper.tearDown()
+
+	uid := helper.uids[0]
+	s := helper.sessions[0]
+	r := helper.results[0]
+	s.background = true
+
+	// A background session is attached but is not counted as online.
+	pud := helper.topic.perUser[uid]
+	pud.online = 0
+	helper.topic.perUser[uid] = pud
+
+	leave := &ClientComMessage{
+		Leave: &MsgClientLeave{
+			Id:    "id456",
+			Topic: topicName,
+		},
+		AsUser: uid.UserId(),
+		sess:   s,
+		init:   true,
+	}
+	helper.topic.unregisterSession(leave)
+	helper.finish()
+
+	if errorMsgs, hasError := helper.hubMessages["__ERROR__"]; hasError {
+		t.Fatal(errorMsgs[0].Ctrl.Text)
+	}
+	if online := helper.topic.perUser[uid].online; online != 0 {
+		t.Errorf("background session changed online count: got %d", online)
+	}
+	registerSessionVerifyOutputs(t, r, []int{http.StatusOK})
+}
+
 func TestUnregisterSessionInactiveTopic(t *testing.T) {
 	topicName := "usrMe"
 	numUsers := 1

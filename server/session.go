@@ -131,6 +131,12 @@ type Session struct {
 
 	// Background session: subscription presence notifications and online status are delayed.
 	background bool
+	// Retain the client's original request even if the normal grace-period
+	// timer fires before authentication finishes.
+	backgroundRequested bool
+	// Root maintenance sessions explicitly opened in the background must never be
+	// promoted to foreground by the normal mobile-client grace-period timer.
+	rootBackground bool
 
 	// Outbound mesages, buffered.
 	// The content must be serialized in format suitable for the session.
@@ -420,9 +426,9 @@ func (s *Session) cleanUp(expired bool) {
 		s.sessionStoreLock.Unlock()
 	}
 
-	s.background = false
 	s.bkgTimer.Stop()
 	s.unsubAll()
+	s.background = false
 	// Stop the write loop.
 	s.stopSession(nil)
 }
@@ -477,7 +483,10 @@ func (s *Session) dispatch(msg *ClientComMessage) {
 		return
 	}
 
-	authLvl := auth.ParseAuthLevel(msg.Extra.AuthLevel)
+	authLvl := auth.LevelNone
+	if msg.Extra != nil {
+		authLvl = auth.ParseAuthLevel(msg.Extra.AuthLevel)
+	}
 	if msg.Extra == nil || (msg.Extra.AsUser == "" && authLvl == auth.LevelNone) {
 		// Use current user's ID and auth level.
 		msg.AsUser = s.uid.UserId()
@@ -791,6 +800,8 @@ func (s *Session) hello(msg *ClientComMessage) {
 		}
 		// This is a background session. Start a timer.
 		if msg.Hi.Background {
+			s.background = true
+			s.backgroundRequested = true
 			s.bkgTimer.Reset(deferredNotificationsTimeout)
 		}
 	} else if msg.Hi.Version == "" || parseVersion(msg.Hi.Version) == s.ver {
@@ -1076,6 +1087,11 @@ func (s *Session) onLogin(msgID string, timestamp time.Time, rec *auth.Rec, miss
 			// Authenticate the session.
 			s.uid = rec.Uid
 			s.authLvl = rec.AuthLevel
+			if s.backgroundRequested && rec.AuthLevel == auth.LevelRoot {
+				s.background = true
+				s.rootBackground = true
+				s.bkgTimer.Stop()
+			}
 			// Reset expiration time.
 			rec.Lifetime = 0
 		}
@@ -1388,6 +1404,11 @@ func (s *Session) serialize(msg *ServerComMessage) (int, any) {
 
 // onBackgroundTimer marks background session as foreground and informs topics it's subscribed to.
 func (s *Session) onBackgroundTimer() {
+	if !s.background || s.rootBackground {
+		return
+	}
+	s.background = false
+
 	s.subsLock.RLock()
 	defer s.subsLock.RUnlock()
 
