@@ -2208,7 +2208,7 @@ func TestUnregisterSessionSimple(t *testing.T) {
 	}
 }
 
-func TestUnregisterBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
+func TestCleanupBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
 	topicName := "usrMe"
 	helper := TopicTestHelper{}
 	helper.setUp(t, 1, types.TopicCatMe, topicName, true)
@@ -2218,22 +2218,29 @@ func TestUnregisterBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
 	s := helper.sessions[0]
 	r := helper.results[0]
 	s.background = true
+	s.inflightReqs = newBoundedWaitGroup(1)
+	s.bkgTimer = time.NewTimer(time.Hour)
+	s.bkgTimer.Stop()
+	s.stop = make(chan any, 1)
+
+	// cleanUp enqueues detachments for asynchronous topic processing. Consume
+	// the queued detachment only after cleanup has completed to ensure the
+	// background state survives until unregisterSession reads it.
+	unreg := make(chan *ClientComMessage, 1)
+	s.subs[topicName] = &Subscription{done: unreg}
 
 	// A background session is attached but is not counted as online.
 	pud := helper.topic.perUser[uid]
 	pud.online = 0
 	helper.topic.perUser[uid] = pud
 
-	leave := &ClientComMessage{
-		Leave: &MsgClientLeave{
-			Id:    "id456",
-			Topic: topicName,
-		},
-		AsUser: uid.UserId(),
-		sess:   s,
-		init:   true,
+	s.cleanUp(true)
+	if !s.background {
+		t.Fatal("cleanup reset background state before queued detachment was processed")
 	}
-	helper.topic.unregisterSession(leave)
+
+	detachment := <-unreg
+	helper.topic.unregisterSession(detachment)
 	helper.finish()
 
 	if errorMsgs, hasError := helper.hubMessages["__ERROR__"]; hasError {
@@ -2242,7 +2249,7 @@ func TestUnregisterBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
 	if online := helper.topic.perUser[uid].online; online != 0 {
 		t.Errorf("background session changed online count: got %d", online)
 	}
-	registerSessionVerifyOutputs(t, r, []int{http.StatusOK})
+	registerSessionVerifyOutputs(t, r, []int{})
 }
 
 func TestUnregisterSessionInactiveTopic(t *testing.T) {

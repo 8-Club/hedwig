@@ -428,7 +428,6 @@ func (s *Session) cleanUp(expired bool) {
 
 	s.bkgTimer.Stop()
 	s.unsubAll()
-	s.background = false
 	// Stop the write loop.
 	s.stopSession(nil)
 }
