@@ -779,7 +779,7 @@ func (t *Topic) handleLeaveRequest(msg *ClientComMessage, sess *Session) {
 		if !uid.IsZero() {
 			// UID not zero: one user removed.
 			pud = t.perUser[uid]
-			if !sess.background {
+			if !sess.isBackground() {
 				pud.online--
 				t.perUser[uid] = pud
 			}
@@ -815,7 +815,7 @@ func (t *Topic) handleLeaveRequest(msg *ClientComMessage, sess *Session) {
 				// len(pssd.muids) could be zero if the session was a background session.
 				meUid = pssd.muids[0]
 			}
-			if !meUid.IsZero() && !sess.background {
+			if !meUid.IsZero() && !sess.isBackground() {
 				// Update user's last online timestamp & user agent. Only one user can be subscribed to 'me' topic.
 				if err := store.Users.UpdateLastSeen(meUid, mrs.userAgent, now); err != nil {
 					logs.Warn.Println("user update last seen:", err)
@@ -1435,7 +1435,7 @@ func (t *Topic) subscriptionReply(asChan bool, msg *ClientComMessage) error {
 		t.addSession(msg.sess, asUid, asChan)
 
 		// The user is online in the topic. Increment the counter if notifications are not deferred.
-		if !msg.sess.background {
+		if !msg.sess.isBackground() {
 			userData := t.perUser[asUid]
 			userData.online++
 			t.perUser[asUid] = userData
@@ -1474,7 +1474,7 @@ func (t *Topic) subscriptionReply(asChan bool, msg *ClientComMessage) error {
 		t.sendImmediateSubNotifications(asUid, modeChanged, msg, now)
 	}
 
-	if !msg.sess.background && hasJoined {
+	if !msg.sess.isBackground() && hasJoined {
 		// Other notifications are also sent immediately for foreground sessions.
 		t.sendSubNotifications(asUid, msg.sess.sid, msg.sess.userAgent)
 	}
@@ -3888,7 +3888,7 @@ func (t *Topic) addSession(sess *Session, asUid types.Uid, isChanSub bool) {
 
 	if pssd, ok := t.sessions[s]; ok {
 		// Subscription already exists.
-		if s.isMultiplex() && !sess.background {
+		if s.isMultiplex() && !sess.isBackground() {
 			// This slice is expected to be relatively short.
 			// Not doing anything fancy here like maps or sorting.
 			pssd.muids = append(pssd.muids, asUid)
@@ -3899,7 +3899,7 @@ func (t *Topic) addSession(sess *Session, asUid types.Uid, isChanSub bool) {
 	}
 
 	if s.isMultiplex() {
-		if sess.background {
+		if sess.isBackground() {
 			t.sessions[s] = perSessionData{}
 		} else {
 			t.sessions[s] = perSessionData{muids: []types.Uid{asUid}, isChanSub: isChanSub}
@@ -3955,7 +3955,7 @@ func (t *Topic) isOnline() bool {
 		if s.isMultiplex() && len(pssd.muids) > 0 {
 			return true
 		}
-		if !s.background {
+		if !s.isBackground() {
 			return true
 		}
 	}

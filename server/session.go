@@ -57,6 +57,14 @@ const (
 	MULTIPLEX
 )
 
+type sessionBackgroundState int32
+
+const (
+	sessionForeground sessionBackgroundState = iota
+	sessionBackgroundDeferred
+	sessionBackgroundPermanent
+)
+
 // Session represents a single WS connection or a long polling session. A user may have multiple
 // sessions.
 type Session struct {
@@ -129,14 +137,12 @@ type Session struct {
 	// 1 = true
 	terminating int32
 
-	// Background session: subscription presence notifications and online status are delayed.
-	background bool
+	// Background session state. Atomic transitions prevent the grace-period timer
+	// from overriding permanent background mode established by root authentication.
+	backgroundState atomic.Int32
 	// Retain the client's original request even if the normal grace-period
 	// timer fires before authentication finishes.
 	backgroundRequested bool
-	// Root maintenance sessions explicitly opened in the background must never be
-	// promoted to foreground by the normal mobile-client grace-period timer.
-	rootBackground bool
 
 	// Outbound mesages, buffered.
 	// The content must be serialized in format suitable for the session.
@@ -223,6 +229,18 @@ func (s *Session) countSub() int {
 		return s.multi.countSub()
 	}
 	return len(s.subs)
+}
+
+func (s *Session) isBackground() bool {
+	return sessionBackgroundState(s.backgroundState.Load()) != sessionForeground
+}
+
+func (s *Session) setDeferredBackground() {
+	s.backgroundState.Store(int32(sessionBackgroundDeferred))
+}
+
+func (s *Session) setPermanentBackground() {
+	s.backgroundState.Store(int32(sessionBackgroundPermanent))
 }
 
 // Inform topics that the session is being terminated.
@@ -799,7 +817,7 @@ func (s *Session) hello(msg *ClientComMessage) {
 		}
 		// This is a background session. Start a timer.
 		if msg.Hi.Background {
-			s.background = true
+			s.setDeferredBackground()
 			s.backgroundRequested = true
 			s.bkgTimer.Reset(deferredNotificationsTimeout)
 		}
@@ -1087,8 +1105,7 @@ func (s *Session) onLogin(msgID string, timestamp time.Time, rec *auth.Rec, miss
 			s.uid = rec.Uid
 			s.authLvl = rec.AuthLevel
 			if s.backgroundRequested && rec.AuthLevel == auth.LevelRoot {
-				s.background = true
-				s.rootBackground = true
+				s.setPermanentBackground()
 				s.bkgTimer.Stop()
 			}
 			// Reset expiration time.
@@ -1403,10 +1420,12 @@ func (s *Session) serialize(msg *ServerComMessage) (int, any) {
 
 // onBackgroundTimer marks background session as foreground and informs topics it's subscribed to.
 func (s *Session) onBackgroundTimer() {
-	if !s.background || s.rootBackground {
+	if !s.backgroundState.CompareAndSwap(
+		int32(sessionBackgroundDeferred),
+		int32(sessionForeground),
+	) {
 		return
 	}
-	s.background = false
 
 	s.subsLock.RLock()
 	defer s.subsLock.RUnlock()

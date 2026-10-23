@@ -81,7 +81,7 @@ func TestDispatchHello(t *testing.T) {
 	if s.ver == 0 {
 		t.Errorf("s.ver expected 0 vs found %d", s.ver)
 	}
-	if !s.background {
+	if !s.isBackground() {
 		t.Error("session must retain the requested background state")
 	}
 	if !s.backgroundRequested {
@@ -260,7 +260,6 @@ func TestRootLoginKeepsBackgroundSessionOutOfForeground(t *testing.T) {
 	s := &Session{
 		send:                make(chan any, 10),
 		ver:                 16,
-		background:          false,
 		backgroundRequested: true,
 		bkgTimer:            bkgTimer,
 	}
@@ -277,17 +276,44 @@ func TestRootLoginKeepsBackgroundSessionOutOfForeground(t *testing.T) {
 	close(s.send)
 	wg.Wait()
 
-	if !s.background {
+	if !s.isBackground() {
 		t.Fatal("root maintenance session must remain background")
 	}
-	if !s.rootBackground {
+	if sessionBackgroundState(s.backgroundState.Load()) != sessionBackgroundPermanent {
 		t.Fatal("root maintenance session must bypass foreground promotion")
 	}
 
 	// Simulate the grace-period timer firing after a slow avatar update.
 	s.onBackgroundTimer()
-	if !s.background {
+	if !s.isBackground() {
 		t.Fatal("root maintenance session was promoted to foreground")
+	}
+}
+
+func TestPermanentBackgroundWinsTimerRace(t *testing.T) {
+	for range 1000 {
+		s := &Session{subs: make(map[string]*Subscription)}
+		s.setDeferredBackground()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			s.onBackgroundTimer()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			s.setPermanentBackground()
+		}()
+		close(start)
+		wg.Wait()
+
+		if state := sessionBackgroundState(s.backgroundState.Load()); state != sessionBackgroundPermanent {
+			t.Fatalf("root background state lost to timer: got %d", state)
+		}
 	}
 }
 

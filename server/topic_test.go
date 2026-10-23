@@ -2217,7 +2217,7 @@ func TestCleanupBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
 	uid := helper.uids[0]
 	s := helper.sessions[0]
 	r := helper.results[0]
-	s.background = true
+	s.setPermanentBackground()
 	s.inflightReqs = newBoundedWaitGroup(1)
 	s.bkgTimer = time.NewTimer(time.Hour)
 	s.bkgTimer.Stop()
@@ -2235,7 +2235,7 @@ func TestCleanupBackgroundSessionDoesNotUpdateLastSeen(t *testing.T) {
 	helper.topic.perUser[uid] = pud
 
 	s.cleanUp(true)
-	if !s.background {
+	if !s.isBackground() {
 		t.Fatal("cleanup reset background state before queued detachment was processed")
 	}
 
