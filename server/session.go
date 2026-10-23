@@ -57,6 +57,14 @@ const (
 	MULTIPLEX
 )
 
+type sessionBackgroundState int32
+
+const (
+	sessionForeground sessionBackgroundState = iota
+	sessionBackgroundDeferred
+	sessionBackgroundPermanent
+)
+
 // Session represents a single WS connection or a long polling session. A user may have multiple
 // sessions.
 type Session struct {
@@ -129,8 +137,12 @@ type Session struct {
 	// 1 = true
 	terminating int32
 
-	// Background session: subscription presence notifications and online status are delayed.
-	background bool
+	// Background session state. Atomic transitions prevent the grace-period timer
+	// from overriding permanent background mode established by root authentication.
+	backgroundState atomic.Int32
+	// Retain the client's original request even if the normal grace-period
+	// timer fires before authentication finishes.
+	backgroundRequested bool
 
 	// Outbound mesages, buffered.
 	// The content must be serialized in format suitable for the session.
@@ -217,6 +229,18 @@ func (s *Session) countSub() int {
 		return s.multi.countSub()
 	}
 	return len(s.subs)
+}
+
+func (s *Session) isBackground() bool {
+	return sessionBackgroundState(s.backgroundState.Load()) != sessionForeground
+}
+
+func (s *Session) setDeferredBackground() {
+	s.backgroundState.Store(int32(sessionBackgroundDeferred))
+}
+
+func (s *Session) setPermanentBackground() {
+	s.backgroundState.Store(int32(sessionBackgroundPermanent))
 }
 
 // Inform topics that the session is being terminated.
@@ -420,7 +444,6 @@ func (s *Session) cleanUp(expired bool) {
 		s.sessionStoreLock.Unlock()
 	}
 
-	s.background = false
 	s.bkgTimer.Stop()
 	s.unsubAll()
 	// Stop the write loop.
@@ -477,7 +500,10 @@ func (s *Session) dispatch(msg *ClientComMessage) {
 		return
 	}
 
-	authLvl := auth.ParseAuthLevel(msg.Extra.AuthLevel)
+	authLvl := auth.LevelNone
+	if msg.Extra != nil {
+		authLvl = auth.ParseAuthLevel(msg.Extra.AuthLevel)
+	}
 	if msg.Extra == nil || (msg.Extra.AsUser == "" && authLvl == auth.LevelNone) {
 		// Use current user's ID and auth level.
 		msg.AsUser = s.uid.UserId()
@@ -791,6 +817,8 @@ func (s *Session) hello(msg *ClientComMessage) {
 		}
 		// This is a background session. Start a timer.
 		if msg.Hi.Background {
+			s.setDeferredBackground()
+			s.backgroundRequested = true
 			s.bkgTimer.Reset(deferredNotificationsTimeout)
 		}
 	} else if msg.Hi.Version == "" || parseVersion(msg.Hi.Version) == s.ver {
@@ -1076,6 +1104,10 @@ func (s *Session) onLogin(msgID string, timestamp time.Time, rec *auth.Rec, miss
 			// Authenticate the session.
 			s.uid = rec.Uid
 			s.authLvl = rec.AuthLevel
+			if s.backgroundRequested && rec.AuthLevel == auth.LevelRoot {
+				s.setPermanentBackground()
+				s.bkgTimer.Stop()
+			}
 			// Reset expiration time.
 			rec.Lifetime = 0
 		}
@@ -1388,6 +1420,13 @@ func (s *Session) serialize(msg *ServerComMessage) (int, any) {
 
 // onBackgroundTimer marks background session as foreground and informs topics it's subscribed to.
 func (s *Session) onBackgroundTimer() {
+	if !s.backgroundState.CompareAndSwap(
+		int32(sessionBackgroundDeferred),
+		int32(sessionForeground),
+	) {
+		return
+	}
+
 	s.subsLock.RLock()
 	defer s.subsLock.RUnlock()
 

@@ -105,8 +105,10 @@ func callPartySession(sess *Session) *Session {
 			lang:        sess.lang,
 			countryCode: sess.countryCode,
 			proxyReq:    ProxyReqCall,
-			background:  sess.background,
 			uid:         sess.uid,
+		}
+		if sess.isBackground() {
+			callSess.setDeferredBackground()
 		}
 		return callSess
 	}

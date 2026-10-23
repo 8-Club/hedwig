@@ -539,8 +539,10 @@ func (c *Cluster) TopicMaster(msg *ClusterReq, rejected *bool) error {
 			lang:        msg.Sess.Lang,
 			countryCode: msg.Sess.CountryCode,
 			proxyReq:    msg.ReqType,
-			background:  msg.Sess.Background,
 			uid:         msg.Sess.Uid,
+		}
+		if msg.Sess.Background {
+			sess.setDeferredBackground()
 		}
 	}
 
@@ -866,7 +868,7 @@ func (c *Cluster) makeClusterReq(reqType ProxyReqType, msg *ClientComMessage, to
 			DeviceID:    sess.deviceID,
 			Platform:    sess.platf,
 			Sid:         sess.sid,
-			Background:  sess.background,
+			Background:  sess.isBackground(),
 		}
 	}
 	return req
