@@ -25,10 +25,15 @@ func test_makeSession(uid types.Uid) *Session {
 }
 
 func TestDispatchHello(t *testing.T) {
+	bkgTimer := time.NewTimer(time.Hour)
+	bkgTimer.Stop()
+	defer bkgTimer.Stop()
+
 	s := &Session{
-		send:    make(chan any, 10),
-		uid:     types.Uid(1),
-		authLvl: auth.LevelAuth,
+		send:     make(chan any, 10),
+		uid:      types.Uid(1),
+		authLvl:  auth.LevelAuth,
+		bkgTimer: bkgTimer,
 	}
 	wg := sync.WaitGroup{}
 	r := responses{}
@@ -36,10 +41,11 @@ func TestDispatchHello(t *testing.T) {
 	go s.testWriteLoop(&r, &wg)
 	msg := &ClientComMessage{
 		Hi: &MsgClientHi{
-			Id:        "123",
-			Version:   "1",
-			UserAgent: "test-ua",
-			Lang:      "en-GB",
+			Id:         "123",
+			Version:    "1",
+			UserAgent:  "test-ua",
+			Lang:       "en-GB",
+			Background: true,
 		},
 	}
 	s.dispatch(msg)
@@ -74,6 +80,12 @@ func TestDispatchHello(t *testing.T) {
 	}
 	if s.ver == 0 {
 		t.Errorf("s.ver expected 0 vs found %d", s.ver)
+	}
+	if !s.isBackground() {
+		t.Error("session must retain the requested background state")
+	}
+	if !s.backgroundRequested {
+		t.Error("session must retain that background mode was requested")
 	}
 }
 
@@ -216,6 +228,92 @@ func TestDispatchLogin(t *testing.T) {
 		}
 	} else {
 		t.Error("Response must contain a ctrl message.")
+	}
+}
+
+func TestRootLoginKeepsBackgroundSessionOutOfForeground(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ss := mock_store.NewMockPersistentStorageInterface(ctrl)
+	aa := mock_auth.NewMockAuthHandler(ctrl)
+
+	uid := types.Uid(1)
+	store.Store = ss
+	defer func() {
+		store.Store = nil
+		ctrl.Finish()
+	}()
+
+	secret := "<==root-auth-secret==>"
+	authRec := &auth.Rec{
+		Uid:       uid,
+		AuthLevel: auth.LevelRoot,
+		State:     types.StateOK,
+	}
+	ss.EXPECT().GetLogicalAuthHandler("basic").Return(aa)
+	aa.EXPECT().Authenticate([]byte(secret), gomock.Any()).Return(authRec, nil, nil)
+	ss.EXPECT().GetLogicalAuthHandler("token").Return(aa)
+	aa.EXPECT().GenSecret(authRec).Return([]byte("token"), time.Time{}, nil)
+
+	bkgTimer := time.NewTimer(time.Hour)
+	bkgTimer.Stop()
+	defer bkgTimer.Stop()
+	s := &Session{
+		send:                make(chan any, 10),
+		ver:                 16,
+		backgroundRequested: true,
+		bkgTimer:            bkgTimer,
+	}
+	wg := sync.WaitGroup{}
+	r := responses{}
+	wg.Add(1)
+	go s.testWriteLoop(&r, &wg)
+
+	s.dispatch(&ClientComMessage{Login: &MsgClientLogin{
+		Id:     "root-login",
+		Scheme: "basic",
+		Secret: []byte(secret),
+	}})
+	close(s.send)
+	wg.Wait()
+
+	if !s.isBackground() {
+		t.Fatal("root maintenance session must remain background")
+	}
+	if sessionBackgroundState(s.backgroundState.Load()) != sessionBackgroundPermanent {
+		t.Fatal("root maintenance session must bypass foreground promotion")
+	}
+
+	// Simulate the grace-period timer firing after a slow avatar update.
+	s.onBackgroundTimer()
+	if !s.isBackground() {
+		t.Fatal("root maintenance session was promoted to foreground")
+	}
+}
+
+func TestPermanentBackgroundWinsTimerRace(t *testing.T) {
+	for range 1000 {
+		s := &Session{subs: make(map[string]*Subscription)}
+		s.setDeferredBackground()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			s.onBackgroundTimer()
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			s.setPermanentBackground()
+		}()
+		close(start)
+		wg.Wait()
+
+		if state := sessionBackgroundState(s.backgroundState.Load()); state != sessionBackgroundPermanent {
+			t.Fatalf("root background state lost to timer: got %d", state)
+		}
 	}
 }
 
