@@ -33,6 +33,10 @@ type authenticator struct {
 	useSeparateEndpoints bool
 	// HTTP client with a timeout for calls to the auth server.
 	httpClient *http.Client
+	// Extra HTTP headers to send with every request.
+	headers map[string]string
+	// Bearer token to send in the Authorization header, if not empty.
+	authToken string
 	// Cache of restricted tag prefixes (namespaces).
 	rTagNS []string
 	// Optional regex pattern for checking tokens.
@@ -98,6 +102,10 @@ func (a *authenticator) Init(jsonconf json.RawMessage, name string) error {
 		UseSeparateEndpoints bool `json:"use_separate_endpoints"`
 		// Timeout for requests to the auth server in seconds. Default is 5.
 		Timeout int `json:"timeout"`
+		// Extra HTTP headers to send with every request.
+		Headers map[string]string `json:"headers"`
+		// Sent as "Authorization: Bearer <auth_token>" so the auth server can verify the caller.
+		AuthToken string `json:"auth_token"`
 	}
 
 	var config configType
@@ -119,6 +127,8 @@ func (a *authenticator) Init(jsonconf json.RawMessage, name string) error {
 	a.serverUrl = serverUrl.String()
 	a.allowNewAccounts = config.AllowNewAccounts
 	a.useSeparateEndpoints = config.UseSeparateEndpoints
+	a.headers = config.Headers
+	a.authToken = config.AuthToken
 
 	timeout := defaultTimeout
 	if config.Timeout > 0 {
@@ -150,8 +160,20 @@ func (a *authenticator) callEndpoint(endpoint string, rec *auth.Rec, secret []by
 		urlToCall = epUrl.String()
 	}
 
+	httpReq, err := http.NewRequest(http.MethodPost, urlToCall, bytes.NewBuffer(content))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	for key, value := range a.headers {
+		httpReq.Header.Set(key, value)
+	}
+	if a.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.authToken)
+	}
+
 	// Send payload to server using client with a configured timeout.
-	post, err := a.httpClient.Post(urlToCall, "application/json", bytes.NewBuffer(content))
+	post, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}

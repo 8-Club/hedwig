@@ -63,7 +63,12 @@ Add the following section to the `auth_config` in [tinode.conf](../../tinode.con
     "allow_new_accounts": true,
     // Use separate endpoints, i.e. add request name to serverUrl path when making requests:
     // http://127.0.0.1:5000/add
-    "use_separate_endpoints": true
+    "use_separate_endpoints": true,
+    // Optional: sent as "Authorization: Bearer <auth_token>" so the authentication server
+    // can verify that requests come from this server.
+    "auth_token": "",
+    // Optional: extra HTTP headers to send with every request.
+    "headers": {}
   },
   ...
 },
