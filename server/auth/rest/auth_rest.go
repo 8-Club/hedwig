@@ -28,6 +28,10 @@ type authenticator struct {
 	allowNewAccounts bool
 	// Use separate endpoints, i.e. add request name to serverUrl path when making requests.
 	useSeparateEndpoints bool
+	// Extra HTTP headers to send with every request.
+	headers map[string]string
+	// Bearer token to send in the Authorization header, if not empty.
+	authToken string
 	// Cache of restricted tag prefixes (namespaces).
 	rTagNS []string
 	// Optional regex pattern for checking tokens.
@@ -91,6 +95,10 @@ func (a *authenticator) Init(jsonconf json.RawMessage, name string) error {
 		AllowNewAccounts bool `json:"allow_new_accounts"`
 		// Use separate endpoints, i.e. add request name to serverUrl path when making requests.
 		UseSeparateEndpoints bool `json:"use_separate_endpoints"`
+		// Extra HTTP headers to send with every request.
+		Headers map[string]string `json:"headers"`
+		// Sent as "Authorization: Bearer <auth_token>" so the auth server can verify the caller.
+		AuthToken string `json:"auth_token"`
 	}
 
 	var config configType
@@ -112,6 +120,8 @@ func (a *authenticator) Init(jsonconf json.RawMessage, name string) error {
 	a.serverUrl = serverUrl.String()
 	a.allowNewAccounts = config.AllowNewAccounts
 	a.useSeparateEndpoints = config.UseSeparateEndpoints
+	a.headers = config.Headers
+	a.authToken = config.AuthToken
 
 	return nil
 }
@@ -137,8 +147,20 @@ func (a *authenticator) callEndpoint(endpoint string, rec *auth.Rec, secret []by
 		urlToCall = epUrl.String()
 	}
 
+	httpReq, err := http.NewRequest(http.MethodPost, urlToCall, bytes.NewBuffer(content))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	for key, value := range a.headers {
+		httpReq.Header.Set(key, value)
+	}
+	if a.authToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+a.authToken)
+	}
+
 	// Send payload to server using default HTTP client.
-	post, err := http.Post(urlToCall, "application/json", bytes.NewBuffer(content))
+	post, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
